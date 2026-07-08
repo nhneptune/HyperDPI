@@ -1,0 +1,5 @@
+# <Traffic_Type>,<Regex_Pattern>,<Action>
+HTTP,http://malware.com.*,DROP
+HTTP,http://trusted-partner.com.*,FORWARD
+HTTPS,HOST://bad-gambling.net.*,DROP
+HTTPS,HOST://.*facebook.com.*,FORWARD
