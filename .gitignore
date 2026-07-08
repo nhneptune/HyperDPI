@@ -1,0 +1,25 @@
+# Build artifacts
+*.o
+*.obj
+*.a
+*.so
+*.d
+hyperdpi
+hyperdpi_description.txt
+network_traffic_filtering_rule_set_L34_L7.txt
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings
+.claude/
+
+# Logs
+*.log
