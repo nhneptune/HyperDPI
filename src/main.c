@@ -150,9 +150,11 @@ static int worker_thread_main(void *arg)
 			uint16_t scan_len = 0;
 			enum packet_action cached_action = ACTION_FORWARD;
 			enum packet_action action;
+			bool no_sni = false;
 
 			enum reassembly_status rs = parser_flow_update(ft, &l2l4, &scan_str,
-									&scan_len, &cached_action);
+									&scan_len, &cached_action,
+									&no_sni);
 			switch (rs) {
 			case REASSEMBLY_CACHED:
 				action = cached_action;
@@ -164,6 +166,17 @@ static int worker_thread_main(void *arg)
 				       action == ACTION_DROP ? "MATCH   " : "NO MATCH",
 				       scan_str, action == ACTION_DROP ? "DROP" : "FORWARD");
 				break;
+			case REASSEMBLY_NO_SNI:
+				/* Fail-open, unchanged policy -- this case only adds
+				 * observability. Cache immediately (like READY) so
+				 * later packets of this flow take the cheap CACHED
+				 * path instead of re-parsing every time (still counted
+				 * as no_sni via *out_no_sni on every such packet). */
+				action = ACTION_FORWARD;
+				parser_flow_cache_verdict(ft, &l2l4.key, action);
+				printf("[Worker %u] TLS_ECH_OR_NO_SNI: no extractable SNI -> FORWARD, content NOT inspected\n",
+				       a->worker_id);
+				break;
 			case REASSEMBLY_PENDING:
 			case REASSEMBLY_GIVE_UP:
 			default:
@@ -172,6 +185,9 @@ static int worker_thread_main(void *arg)
 				action = ACTION_FORWARD;
 				break;
 			}
+
+			if (no_sni)
+				stats_count_tls_no_sni(lcore_id);
 
 			if (action == ACTION_DROP) {
 				stats_count_dropped(lcore_id);

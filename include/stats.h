@@ -18,6 +18,18 @@ struct core_stats {
 	uint64_t forwarded_packets;
 	uint64_t dropped_packets;
 	uint64_t tx_packets;
+	/* Packets belonging to HTTPS flows where no SNI was ever extracted
+	 * (REASSEMBLY_NO_SNI and every later REASSEMBLY_CACHED packet of the
+	 * same flow, per parser_flow_update()'s *out_no_sni -- counts every
+	 * uninspected packet of the flow, not just the one that triggered the
+	 * verdict) -- a subset of https_packets, not an additional traffic
+	 * class. The name deliberately conflates "confirmed ECH" with "no SNI
+	 * for any other reason" (malformed ClientHello, non-ClientHello traffic
+	 * on 443, session resumption, ...): passive parsing cannot cleanly tell
+	 * these apart (see "Is Encrypted ClientHello a Challenge for Traffic
+	 * Classification?", IEEE 2022, and version_03.md). This counter's job
+	 * is bounding the scale of the DPI blind spot, not attributing cause. */
+	uint64_t tls_ech_or_no_sni_packets;
 } __rte_cache_aligned;
 
 extern struct core_stats stats_table[RTE_MAX_LCORE];
@@ -53,6 +65,11 @@ static inline void stats_count_forwarded(unsigned lcore_id)
 static inline void stats_count_dropped(unsigned lcore_id)
 {
 	stats_table[lcore_id].dropped_packets++;
+}
+
+static inline void stats_count_tls_no_sni(unsigned lcore_id)
+{
+	stats_table[lcore_id].tls_ech_or_no_sni_packets++;
 }
 
 static inline void stats_add_tx(unsigned lcore_id, uint64_t packets)

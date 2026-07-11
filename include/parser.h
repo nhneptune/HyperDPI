@@ -74,6 +74,9 @@ struct l2l4_result {
 	struct flow_key key;
 	const char *payload;
 	uint16_t payload_len;
+	uint32_t seq; /* TCP sequence number of payload[0] (host byte order); used by
+			* parser_flow_update() to place segments correctly regardless of
+			* arrival order and resolve overlaps deterministically. */
 };
 
 /* Validating L2->L4 parse per spec 5.1: ether_type must be IPv4, next_proto
@@ -93,14 +96,57 @@ enum reassembly_status {
 			     * call parser_flow_cache_verdict() with the result */
 	REASSEMBLY_CACHED,  /* flow already has a verdict from a prior scan: out_cached_action set */
 	REASSEMBLY_GIVE_UP, /* buffer cap hit without finding Host/SNI: caller fail-opens (FORWARD) */
+	REASSEMBLY_NO_SNI,  /* TLS ClientHello structurally parsed to completion (or definitively
+			     * not a ClientHello) without an extractable SNI -- likely ECH or
+			     * another SNI-less case (see version_03.md). Distinct from
+			     * REASSEMBLY_GIVE_UP: fires immediately once the extensions are fully
+			     * parsed, not only after the 4KB window fills. Caller fail-opens
+			     * (FORWARD) and should cache the verdict immediately so subsequent
+			     * packets of the flow skip re-parsing. */
 };
+
+/* Placeholder for a future flow-feature-based fallback classifier (packet
+ * size/timing side channels) for HTTPS flows that hit REASSEMBLY_NO_SNI --
+ * see "Is Encrypted ClientHello a Challenge for Traffic Classification?"
+ * (IEEE 2022) and version_03.md. NOT implemented in this revision: real
+ * traffic-analysis classification is out of scope here. This interface
+ * exists only so a future revision has a defined, stable integration point
+ * (intended call site: parser_flow_update(), on REASSEMBLY_NO_SNI) without
+ * needing to touch this API again. */
+enum fallback_verdict {
+	FALLBACK_UNKNOWN = 0,  /* no classification made -- caller should keep fail-opening */
+	FALLBACK_SUSPICIOUS,   /* flow-feature classifier flagged this flow (unused today) */
+};
+
+struct flow_features {
+	uint32_t total_bytes;
+	uint32_t packet_count;
+	uint64_t first_seen_tsc;
+	uint64_t last_seen_tsc;
+};
+
+/* Not implemented in this revision -- always returns FALLBACK_UNKNOWN. Not
+ * called from the hot path (parser_flow_update() does not track per-flow
+ * flow_features today; adding those fields before a real classifier exists
+ * would be dead weight). */
+enum fallback_verdict parser_flow_classify_fallback(const struct flow_features *features);
 
 /* Feeds l2l4->payload into the reassembly buffer for l2l4->key (creating a
  * new flow entry if needed), opportunistically expiring flows idle longer
- * than the table's timeout, and reports what the caller should do next. */
+ * than the table's timeout, and reports what the caller should do next.
+ *
+ * *out_no_sni is set true whenever this packet represents traffic that was
+ * never content-inspected due to a missing SNI -- both on the initial
+ * REASSEMBLY_NO_SNI event AND on every later REASSEMBLY_CACHED packet of
+ * the same flow (the verdict is cached after the first event, per
+ * parser_flow_cache_verdict(), so only *out_no_sni -- not the return status
+ * -- distinguishes these from an ordinary cached DPI-scan verdict). Lets the
+ * caller count every uninspected packet, not just the first per flow,
+ * matching the counter's documented purpose of bounding blind-spot volume
+ * (see stats.h, version_03.md). Set false otherwise. */
 enum reassembly_status parser_flow_update(struct flow_table *ft, const struct l2l4_result *l2l4,
 					   const char **out_str, uint16_t *out_len,
-					   enum packet_action *out_cached_action);
+					   enum packet_action *out_cached_action, bool *out_no_sni);
 
 /* Records the verdict from dpi_engine_scan() for this flow so subsequent
  * packets skip re-scanning and reuse the cached action directly. */

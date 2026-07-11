@@ -42,6 +42,7 @@ static void aggregate(struct core_stats *out)
 		out->forwarded_packets += s->forwarded_packets;
 		out->dropped_packets += s->dropped_packets;
 		out->tx_packets += s->tx_packets;
+		out->tls_ech_or_no_sni_packets += s->tls_ech_or_no_sni_packets;
 	}
 }
 
@@ -99,6 +100,8 @@ int stats_thread_main(void *arg)
 		       cur.http_packets, cur.https_packets, cur.non_dpi_packets);
 		printf("Forwarded: %" PRIu64 " | Dropped: %" PRIu64 " | TX sent: %" PRIu64 "\n",
 		       cur.forwarded_packets, cur.dropped_packets, cur.tx_packets);
+		printf("TLS_ECH_OR_NO_SNI (not inspected, subset of HTTPS): %" PRIu64 "\n",
+		       cur.tls_ech_or_no_sni_packets);
 
 		double worker_pps[MAX_WORKERS];
 		double sum_pps = 0, max_pps = 0;
