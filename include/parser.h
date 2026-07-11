@@ -30,6 +30,44 @@ struct flow_key {
  * land on does not affect correctness. */
 uint32_t parser_flow_rss_hash(struct rte_mbuf *pkt);
 
+/*
+ * Load-aware RX steering (RSS++-inspired, Phase 1 -- see version_01.md for
+ * the full design writeup). A fixed-size bucket->worker indirection table
+ * sits between the 5-tuple hash and the worker index: instead of `hash %
+ * num_workers` picking a worker directly, the hash selects one of
+ * PARSER_NUM_BUCKETS buckets, and each bucket independently maps to a
+ * worker. The Stats thread periodically shifts buckets that have gone idle
+ * (no packet seen recently) from an overloaded worker to an underloaded
+ * one, without ever touching a worker's live flow_table -- active-flow
+ * state migration is out of scope for Phase 1.
+ */
+
+/* One-time setup: call once from main(), after num_workers is known and
+ * before the RX thread launches. Seeds bucket_worker[b] = b % num_workers,
+ * giving the same "every worker gets an even share" starting point the old
+ * `hash % num_workers` scheme had. */
+void parser_bucket_table_init(unsigned num_workers);
+
+/* Hot path: called once per packet from the RX thread in place of the old
+ * `hash % num_workers`. Records the bucket's activity timestamp (used by
+ * parser_bucket_rebalance()'s idle check) and returns the worker currently
+ * assigned to that bucket. */
+unsigned parser_bucket_select_worker(uint32_t hash, uint64_t now_tsc);
+
+/* Called once per Stats-thread tick when an imbalance is detected. Scans
+ * the buckets currently assigned to `overloaded_worker` for ones idle
+ * longer than idle_threshold_cycles and reassigns up to
+ * PARSER_MAX_BUCKETS_PER_PASS of them to `underloaded_worker`. Returns how
+ * many buckets were actually moved (0 if none were eligible -- e.g. an
+ * elephant flow's own bucket never goes idle and so can never move here).
+ * Never touches any worker's flow_table. */
+unsigned parser_bucket_rebalance(unsigned overloaded_worker, unsigned underloaded_worker,
+				  uint64_t now_tsc, uint64_t idle_threshold_cycles);
+
+/* Diagnostic only: fills counts_out[0..num_workers-1] with how many of the
+ * PARSER_NUM_BUCKETS buckets are currently assigned to each worker. */
+void parser_bucket_get_distribution(unsigned num_workers, unsigned *counts_out);
+
 /* Result of the full L2->L4 parse + classification done in the worker. */
 struct l2l4_result {
 	enum traffic_type type; /* TRAFFIC_HTTP or TRAFFIC_HTTPS (never NON_DPI here) */

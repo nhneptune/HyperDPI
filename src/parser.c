@@ -139,6 +139,80 @@ bool parser_parse_l2_l4(struct rte_mbuf *pkt, struct l2l4_result *out)
 	return extract_headers(pkt, &out->key, &out->type, &out->payload, &out->payload_len);
 }
 
+#define PARSER_NUM_BUCKETS          256 /* power of two: bucket = hash & (N-1) */
+#define PARSER_MAX_BUCKETS_PER_PASS   8 /* cap moved per rebalance call -- anti-oscillation */
+
+/*
+ * bucket_worker[]: written only by the Stats thread (parser_bucket_rebalance),
+ * read only by the RX thread (parser_bucket_select_worker). Single-writer/
+ * single-reader, no locks needed -- same lock-free pattern as stats_table[]
+ * (see stats.h). x86 TSO guarantees no torn reads for these word-sized
+ * elements; a reader occasionally seeing a reassignment a few packets late
+ * is harmless since buckets are only ever moved once idle.
+ *
+ * bucket_last_seen_tsc[]: written only by the RX thread (every packet),
+ * read only by the Stats thread's idle scan. Same pattern, opposite
+ * direction.
+ *
+ * Note: traffic that isn't IPv4/TCP-UDP or not dst port 80/443 always
+ * hashes to bucket 0 (parser_flow_rss_hash()'s fallback). That keeps
+ * bucket 0 almost permanently "hot" so it will rarely be reassigned --
+ * harmless, since that traffic is dropped at the L2-L4 stage in the
+ * worker regardless of which one it lands on.
+ */
+static uint8_t bucket_worker[PARSER_NUM_BUCKETS];
+static uint64_t bucket_last_seen_tsc[PARSER_NUM_BUCKETS];
+
+void parser_bucket_table_init(unsigned num_workers)
+{
+	for (unsigned b = 0; b < PARSER_NUM_BUCKETS; b++)
+		bucket_worker[b] = (uint8_t)(b % num_workers);
+	memset(bucket_last_seen_tsc, 0, sizeof(bucket_last_seen_tsc));
+}
+
+unsigned parser_bucket_select_worker(uint32_t hash, uint64_t now_tsc)
+{
+	uint32_t bucket = hash & (PARSER_NUM_BUCKETS - 1);
+	bucket_last_seen_tsc[bucket] = now_tsc;
+	return bucket_worker[bucket];
+}
+
+unsigned parser_bucket_rebalance(unsigned overloaded_worker, unsigned underloaded_worker,
+				  uint64_t now_tsc, uint64_t idle_threshold_cycles)
+{
+	unsigned moved = 0;
+
+	for (uint32_t b = 0; b < PARSER_NUM_BUCKETS && moved < PARSER_MAX_BUCKETS_PER_PASS; b++) {
+		if (bucket_worker[b] != overloaded_worker)
+			continue;
+
+		uint64_t last = bucket_last_seen_tsc[b];
+		/* now_tsc is a snapshot the caller took before this call; the RX
+		 * thread may have stamped a newer timestamp on this bucket since
+		 * then (last >= now_tsc). Treat that as "still active" explicitly
+		 * -- without this check, now_tsc - last would underflow (both are
+		 * uint64_t) and wrongly look like a huge idle duration, letting an
+		 * actively-hot bucket be reassigned. */
+		if (last >= now_tsc || now_tsc - last <= idle_threshold_cycles)
+			continue; /* still active recently -- do not touch */
+
+		bucket_worker[b] = (uint8_t)underloaded_worker;
+		moved++;
+	}
+
+	return moved;
+}
+
+void parser_bucket_get_distribution(unsigned num_workers, unsigned *counts_out)
+{
+	memset(counts_out, 0, sizeof(*counts_out) * num_workers);
+	for (uint32_t b = 0; b < PARSER_NUM_BUCKETS; b++) {
+		unsigned w = bucket_worker[b];
+		if (w < num_workers)
+			counts_out[w]++;
+	}
+}
+
 /* Case-insensitive substring search over a NUL-terminated buffer. */
 static char *find_ci(const char *hay, const char *needle)
 {

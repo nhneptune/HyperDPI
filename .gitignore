@@ -23,3 +23,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Generated verification fixtures (large, reproducible via scripts/gen_elephant_pcap.py)
+pcap/elephant.pcap
+scripts/__pycache__/

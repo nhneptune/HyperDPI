@@ -60,8 +60,23 @@ static inline void stats_add_tx(unsigned lcore_id, uint64_t packets)
 	stats_table[lcore_id].tx_packets += packets;
 }
 
-/* lcore entry point: launched via rte_eal_remote_launch(), prints an
- * aggregated snapshot to the console every 1s until force_quit is set. */
+/* Args for stats_thread_main(), built in main() once num_workers/lcores are
+ * known. worker_lcores[i] lets the stats thread index stats_table[] for
+ * worker i directly (needed for the per-worker PPS load-balancing signal --
+ * see parser_bucket_rebalance() in parser.h). rebalance_enabled lets a run
+ * disable rebalancing (-B flag) while keeping bucket-based steering, to
+ * capture a "before" baseline for verification. */
+struct stats_thread_args {
+	unsigned num_workers;
+	unsigned worker_lcores[MAX_WORKERS];
+	bool rebalance_enabled;
+};
+
+/* lcore entry point: launched via rte_eal_remote_launch() with a
+ * `struct stats_thread_args *` as arg. Prints an aggregated snapshot plus a
+ * per-worker PPS breakdown to the console every 1s until force_quit is set,
+ * and (if rebalance_enabled) periodically rebalances idle hash buckets away
+ * from the most-loaded worker. */
 int stats_thread_main(void *arg);
 
 #endif /* STATS_H */

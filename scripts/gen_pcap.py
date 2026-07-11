@@ -60,27 +60,32 @@ def tcp_flow(src_ip, dst_ip, sport, dport, segments):
 	return pkts
 
 
-packets = []
+def main():
+	packets = []
 
-# Scenario 1: HTTP DROP -- Host matches "http://malware.com.*" (DROP rule)
-packets += tcp_flow("10.0.0.1", "93.184.216.1", 40001, 80,
-		     [build_http_request("malware.com", "/evil")])
+	# Scenario 1: HTTP DROP -- Host matches "http://malware.com.*" (DROP rule)
+	packets += tcp_flow("10.0.0.1", "93.184.216.1", 40001, 80,
+			     [build_http_request("malware.com", "/evil")])
 
-# Scenario 2: HTTPS DROP -- SNI matches "HOST://bad-gambling.net.*" (DROP rule),
-# ClientHello fits in a single TCP segment
-packets += tcp_flow("10.0.0.2", "93.184.216.2", 40002, 443,
-		     [build_client_hello("bad-gambling.net")])
+	# Scenario 2: HTTPS DROP -- SNI matches "HOST://bad-gambling.net.*" (DROP rule),
+	# ClientHello fits in a single TCP segment
+	packets += tcp_flow("10.0.0.2", "93.184.216.2", 40002, 443,
+			     [build_client_hello("bad-gambling.net")])
 
-# Scenario 3: FORWARD -- no rule matches (default allow)
-packets += tcp_flow("10.0.0.3", "93.184.216.3", 40003, 80,
-		     [build_http_request("example.com", "/")])
+	# Scenario 3: FORWARD -- no rule matches (default allow)
+	packets += tcp_flow("10.0.0.3", "93.184.216.3", 40003, 80,
+			     [build_http_request("example.com", "/")])
 
-# Scenario 4 (extra): same DROP-listed SNI as scenario 2, but the
-# ClientHello is split across two TCP segments to exercise reassembly.
-ch = build_client_hello("bad-gambling.net")
-mid = len(ch) // 2
-packets += tcp_flow("10.0.0.5", "93.184.216.5", 40005, 443,
-		     [ch[:mid], ch[mid:]])
+	# Scenario 4 (extra): same DROP-listed SNI as scenario 2, but the
+	# ClientHello is split across two TCP segments to exercise reassembly.
+	ch = build_client_hello("bad-gambling.net")
+	mid = len(ch) // 2
+	packets += tcp_flow("10.0.0.5", "93.184.216.5", 40005, 443,
+			     [ch[:mid], ch[mid:]])
 
-wrpcap("pcap/traffic.pcap", packets)
-print(f"wrote {len(packets)} packets to pcap/traffic.pcap")
+	wrpcap("pcap/traffic.pcap", packets)
+	print(f"wrote {len(packets)} packets to pcap/traffic.pcap")
+
+
+if __name__ == "__main__":
+	main()

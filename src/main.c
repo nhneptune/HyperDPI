@@ -70,12 +70,13 @@ static int rx_thread_main(void *arg)
 			continue;
 
 		uint64_t rx_bytes = 0;
+		uint64_t now_tsc = rte_get_timer_cycles();
 		memset(dest_n, 0, sizeof(dest_n));
 
 		for (uint16_t i = 0; i < nb_rx; i++) {
 			rx_bytes += rte_pktmbuf_pkt_len(bufs[i]);
 			uint32_t h = parser_flow_rss_hash(bufs[i]);
-			unsigned w = h % a->num_workers;
+			unsigned w = parser_bucket_select_worker(h, now_tsc);
 			dest[w][dest_n[w]++] = bufs[i];
 		}
 
@@ -227,7 +228,14 @@ static int tx_thread_main(void *arg)
 static void usage(const char *prgname)
 {
 	fprintf(stderr,
-		"Usage: %s [EAL options] -- [-p patterns_file] [-w num_workers(2-%d)]\n",
+		"Usage: %s [EAL options] -- [-p patterns_file] [-w num_workers(2-%d)] [-B] [-M nb_mbufs]\n"
+		"  -B  disable load-aware bucket rebalancing (keeps bucket-based steering);\n"
+		"      useful for capturing a \"before\" baseline\n"
+		"  -M  override the mbuf pool size (default: sized from ring sizes; named -M,\n"
+		"      not -m, to avoid confusion with EAL's own -m memory-size flag). The\n"
+		"      net_pcap PMD's infinite_rx=1 mode requires nb_mbufs >= the number of\n"
+		"      packets in the pcap file, so this is needed for infinite_rx runs\n"
+		"      against large fixtures\n",
 		prgname, MAX_WORKERS);
 }
 
@@ -245,10 +253,12 @@ int main(int argc, char **argv)
 
 	const char *patterns_file = DEFAULT_PATTERNS_FILE;
 	unsigned num_workers = DEFAULT_NUM_WORKERS;
+	bool rebalance_enabled = true;
+	unsigned mbuf_pool_override = 0; /* 0 = use the default formula below */
 
 	int opt;
 	optind = 1;
-	while ((opt = getopt(argc, argv, "p:w:h")) != -1) {
+	while ((opt = getopt(argc, argv, "p:w:hBM:")) != -1) {
 		switch (opt) {
 		case 'p':
 			patterns_file = optarg;
@@ -256,6 +266,16 @@ int main(int argc, char **argv)
 		case 'w':
 			num_workers = (unsigned)atoi(optarg);
 			break;
+		case 'B':
+			rebalance_enabled = false;
+			break;
+		case 'M': {
+			int m = atoi(optarg);
+			if (m <= 0)
+				rte_exit(EXIT_FAILURE, "-M must be a positive mbuf count\n");
+			mbuf_pool_override = (unsigned)m;
+			break;
+		}
 		case 'h':
 		default:
 			usage(argv[0]);
@@ -298,8 +318,10 @@ int main(int argc, char **argv)
 	unsigned tx_lcore = lcores[1 + num_workers];
 	unsigned stats_lcore = lcores[2 + num_workers];
 
-	unsigned nb_mbufs = RX_RING_SIZE + num_workers * WORKER_RING_SIZE + TX_RING_SIZE +
-			     needed_lcores * MBUF_POOL_CACHE;
+	unsigned nb_mbufs = mbuf_pool_override != 0
+				    ? mbuf_pool_override
+				    : RX_RING_SIZE + num_workers * WORKER_RING_SIZE + TX_RING_SIZE +
+					      needed_lcores * MBUF_POOL_CACHE;
 
 	struct rte_mempool *mbuf_pool =
 		rte_pktmbuf_pool_create("MBUF_POOL", nb_mbufs, MBUF_POOL_CACHE, 0,
@@ -339,6 +361,8 @@ int main(int argc, char **argv)
 
 	uint64_t flow_timeout_cycles = rte_get_timer_hz() * 3 / 2; /* ~1.5s idle timeout */
 
+	parser_bucket_table_init(num_workers);
+
 	struct rx_thread_args rx_args = {
 		.port_id = port_id,
 		.worker_rings = worker_rings,
@@ -358,7 +382,13 @@ int main(int argc, char **argv)
 	struct tx_thread_args tx_args = {.port_id = port_id, .tx_ring = tx_ring};
 	rte_eal_remote_launch(tx_thread_main, &tx_args, tx_lcore);
 
-	rte_eal_remote_launch(stats_thread_main, NULL, stats_lcore);
+	struct stats_thread_args stats_args = {
+		.num_workers = num_workers,
+		.rebalance_enabled = rebalance_enabled,
+	};
+	for (unsigned i = 0; i < num_workers; i++)
+		stats_args.worker_lcores[i] = worker_lcores[i];
+	rte_eal_remote_launch(stats_thread_main, &stats_args, stats_lcore);
 
 	printf("[Main] HyperDPI running with %u worker(s). Press Ctrl+C to stop.\n", num_workers);
 
