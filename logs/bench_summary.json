@@ -1,0 +1,35 @@
+[
+  {
+    "workers": 2,
+    "throughput_min": 10209.03,
+    "throughput_avg": 10381.009333333333,
+    "throughput_max": 10904.53,
+    "pps_min": 17467140,
+    "pps_avg": 17761389.1,
+    "pps_max": 18657103,
+    "cpu_avg": 500.0733149198247,
+    "clean_shutdown": true
+  },
+  {
+    "workers": 3,
+    "throughput_min": 10336.89,
+    "throughput_avg": 10951.639,
+    "throughput_max": 11448.95,
+    "pps_min": 17685901,
+    "pps_avg": 18737707.633333333,
+    "pps_max": 19588588,
+    "cpu_avg": 600.019697057726,
+    "clean_shutdown": true
+  },
+  {
+    "workers": 4,
+    "throughput_min": 9340.57,
+    "throughput_avg": 9663.500333333333,
+    "throughput_max": 10416.41,
+    "pps_min": 15981243,
+    "pps_avg": 16533766.6,
+    "pps_max": 17821960,
+    "cpu_avg": 700.0131479688473,
+    "clean_shutdown": true
+  }
+]
